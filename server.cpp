@@ -1,7 +1,14 @@
 #include <stdio.h>
 #include <winsock2.h>
+#include <iostream>
+#include <random>
+#include <windows.h>
+#include "transfer_data.hpp"
 
 int main() {
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    
 
     WSADATA wsaData;
     int wsaResult = WSAStartup(MAKEWORD(2, 2), &wsaData);
@@ -44,14 +51,46 @@ int main() {
     }
     printf("Client connected successfully.\n");
 
-    char recvBuffer[512];
-    iResult = recv(acceptedSocket, recvBuffer, sizeof(recvBuffer), 0);
-    if (iResult > 0) {
-        printf("Received %d bytes: %.*s\n", iResult, iResult, recvBuffer);
-    } else if (iResult == 0) {
-        printf("Connection closing...\n");
-    } else {
-        printf("Recv failed with error: %d\n", WSAGetLastError());
+    char recvBuffer[200];
+    char sendBuffer[200];
+    transfer_data_client tdc;
+    transfer_data_server tds;
+    while(true){
+
+        iResult = recv(acceptedSocket, recvBuffer, 200, 0);
+        if (iResult > 0) {
+            memcpy(&tdc, recvBuffer, sizeof(tdc));
+            
+            if(tdc.guessed){
+                std::cout << "Upsesno pogodjen broj " << tdc.to << " u " << tdc.from << " pokusaja!\n";
+                std::cout <<"Press enter to exit\n";
+                std::cin.get();
+                break;
+            }else if(!tdc.tries){
+                std::cout << "Neuspesno pogodjen broj " << tdc.to << " u " << tdc.from << " pokusaja\n";
+                std::cout <<"Press enter to exit\n";
+                std::cin.get();
+                break;
+            }
+            std::cout << "Broj je izmedju " << tdc.from << " i " << tdc.to << "\nJos " << tdc.tries << " pokusaja\n";
+
+            std::uniform_int_distribution<> dist(tdc.from, tdc.to);
+            tds.guess = dist(gen);
+
+            std::cout << "Pogadjam: " << tds.guess << std::endl; 
+            
+            memcpy(sendBuffer, &tds, sizeof(tds));
+            
+            Sleep(1000);
+            iResult = send(acceptedSocket, sendBuffer, 200, 0);
+
+            if (iResult == SOCKET_ERROR) {
+            printf("Send failed with error: %d\n", WSAGetLastError());
+            closesocket(acceptedSocket);
+            WSACleanup();
+            return 1;
+        }
+        }
     }
 
     closesocket(listenSocket);
