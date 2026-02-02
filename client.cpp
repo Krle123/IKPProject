@@ -75,20 +75,20 @@ int main() {
             tdc.tries = MAX_TRIES - tries;
             
             if(tds.guess == correct_number){
-                std::cout << "Pogodjeno!\n";
+                std::cout << "Correct!\n";
                 tdc.guessed = true;
                 tdc.from = tries;
                 tdc.to = correct_number;
             }else if(tds.guess > correct_number){
-                std::cout << "Manje\n";
-                tdc.to = tds.guess;
+                std::cout << "Lower\n";
+                tdc.to = tds.guess - 1;
             }else if(tds.guess < correct_number){
-                std::cout << "Vise\n";
-                tdc.from = tds.guess;
+                std::cout << "Higher\n";
+                tdc.from = tds.guess + 1;
             }
             
             if((tries == MAX_TRIES) && !tdc.guessed){
-                std::cout << "Nema vise pokusaja\n";
+                std::cout << "No more tries left\n";
                 tdc.guessed = false;
                 tdc.from = tries;
                 tdc.to = correct_number;

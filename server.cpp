@@ -1,98 +1,174 @@
-#include <stdio.h>
 #include <winsock2.h>
+#include <windows.h>
+#include <stdio.h>
 #include <iostream>
 #include <random>
-#include <windows.h>
+#include <fstream>
+#include <conio.h>
 #include "transfer_data.hpp"
+#include "lista/mlist.hpp"
 
-int main() {
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    
+#define MAX_CLIENTS 8
 
-    WSADATA wsaData;
-    int wsaResult = WSAStartup(MAKEWORD(2, 2), &wsaData);
-    if (wsaResult != 0) {
-        printf("WSAStartup failed: %d\n", wsaResult);
-        return 1;
-    }
-    SOCKET listenSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    
-    struct sockaddr_in serverAddress;
-        serverAddress.sin_family = AF_INET;
-        serverAddress.sin_addr.s_addr = INADDR_ANY;
-        serverAddress.sin_port = htons(8080);
+List<SOCKET> clients;
+CRITICAL_SECTION clients_lock;
+CRITICAL_SECTION stats_lock;
 
-    if (listenSocket == INVALID_SOCKET) {
-        printf("Socket creation failed with error: %d\n", WSAGetLastError());
-        return 1;
-    }
-    printf("Socket created successfully.\n");
-    int iResult = bind(listenSocket, (SOCKADDR*)&serverAddress, sizeof(serverAddress));
-    if (iResult == SOCKET_ERROR) {
-        printf("Bind failed with error: %d\n", WSAGetLastError());
-        closesocket(listenSocket);
-        return 1;
-    }
-    printf("Bind successful.\n");
-    iResult = listen(listenSocket, SOMAXCONN);
-    if (iResult == SOCKET_ERROR) {
-        printf("Listen failed with error: %d\n", WSAGetLastError());
-        closesocket(listenSocket);
-        return 1;
-    }
-    printf("Listening on socket.\n");
+volatile bool server_running = true;
 
-    SOCKET acceptedSocket = accept(listenSocket, NULL, NULL);
-    if (acceptedSocket == INVALID_SOCKET) {
-        printf("Accept failed with error: %d\n", WSAGetLastError());
-        closesocket(listenSocket);
-        return 1;
-    }
-    printf("Client connected successfully.\n");
+int total_wins = 0;
+int total_losses = 0;
+
+void log_result(bool win) {
+    EnterCriticalSection(&stats_lock);
+
+    if (win)
+        total_wins++;
+    else
+        total_losses++;
+
+    std::ofstream file("results.txt", std::ios::app);
+    file << (win ? "WIN\n" : "LOSS\n");
+    file.close();
+
+    std::cout << "Wins: " << total_wins
+              << " | Losses: " << total_losses << std::endl;
+
+    LeaveCriticalSection(&stats_lock);
+}
+
+DWORD WINAPI client_thread(LPVOID param) {
+    SOCKET client = (SOCKET)param;
+
+    u_long mode = 1;
+    ioctlsocket(client, FIONBIO, &mode);
+
+    fd_set readfds;
+    timeval tv;
 
     char recvBuffer[200];
     char sendBuffer[200];
+
     transfer_data_client tdc;
     transfer_data_server tds;
-    while(true){
 
-        iResult = recv(acceptedSocket, recvBuffer, 200, 0);
-        if (iResult > 0) {
+    std::random_device rd;
+    std::mt19937 gen(rd());
+
+    bool game_finished = false;
+    bool win = false;
+
+    while (true) {
+        FD_ZERO(&readfds);
+        FD_SET(client, &readfds);
+
+        tv.tv_sec = 1;
+        tv.tv_usec = 0;
+
+        int res = select(0, &readfds, NULL, NULL, &tv);
+        if (res <= 0) continue;
+
+        if (FD_ISSET(client, &readfds)) {
+            int bytes = recv(client, recvBuffer, 200, 0);
+            if (bytes <= 0) break;
+
             memcpy(&tdc, recvBuffer, sizeof(tdc));
-            
-            if(tdc.guessed){
-                std::cout << "Upsesno pogodjen broj " << tdc.to << " u " << tdc.from << " pokusaja!\n";
-                std::cout <<"Press enter to exit\n";
-                std::cin.get();
-                break;
-            }else if(!tdc.tries){
-                std::cout << "Neuspesno pogodjen broj " << tdc.to << " u " << tdc.from << " pokusaja\n";
-                std::cout <<"Press enter to exit\n";
-                std::cin.get();
+
+            if (tdc.guessed) {
+                game_finished = true;
+                win = true;
                 break;
             }
-            std::cout << "Broj je izmedju " << tdc.from << " i " << tdc.to << "\nJos " << tdc.tries << " pokusaja\n";
+
+            if (!tdc.tries) {
+                game_finished = true;
+                win = false;
+                break;
+            }
 
             std::uniform_int_distribution<> dist(tdc.from, tdc.to);
             tds.guess = dist(gen);
 
-            std::cout << "Pogadjam: " << tds.guess << std::endl; 
-            
             memcpy(sendBuffer, &tds, sizeof(tds));
-            
-            Sleep(1000);
-            iResult = send(acceptedSocket, sendBuffer, 200, 0);
-
-            if (iResult == SOCKET_ERROR) {
-            printf("Send failed with error: %d\n", WSAGetLastError());
-            closesocket(acceptedSocket);
-            WSACleanup();
-            return 1;
-        }
+            send(client, sendBuffer, 200, 0);
         }
     }
 
+    if (game_finished)
+        log_result(win);
+
+    EnterCriticalSection(&clients_lock);
+    if (clients.len() > 0)
+        clients.pop_front();
+    LeaveCriticalSection(&clients_lock);
+
+    closesocket(client);
+    return 0;
+}
+
+int main() {
+    WSADATA wsaData;
+    WSAStartup(MAKEWORD(2, 2), &wsaData);
+
+    InitializeCriticalSection(&clients_lock);
+    InitializeCriticalSection(&stats_lock);
+
+    SOCKET listenSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+
+    sockaddr_in serverAddress;
+    serverAddress.sin_family = AF_INET;
+    serverAddress.sin_addr.s_addr = INADDR_ANY;
+    serverAddress.sin_port = htons(8080);
+
+    bind(listenSocket, (SOCKADDR*)&serverAddress, sizeof(serverAddress));
+    listen(listenSocket, SOMAXCONN);
+
+    u_long mode = 1;
+    ioctlsocket(listenSocket, FIONBIO, &mode);
+
+    fd_set readfds;
+    timeval tv;
+
+    std::ofstream file("results.txt", std::ios::app);
+    file << "\nServer started\n";
+    file.close();
+
+    while (server_running) {
+        if (_kbhit()) {
+            char c = _getch();
+            if (c == '1') {
+                server_running = false;
+                break;
+            }
+        }
+
+
+        FD_ZERO(&readfds);
+        FD_SET(listenSocket, &readfds);
+
+        tv.tv_sec = 1;
+        tv.tv_usec = 0;
+
+        int res = select(0, &readfds, NULL, NULL, &tv);
+        if (res <= 0) continue;
+
+        if (FD_ISSET(listenSocket, &readfds)) {
+            SOCKET client = accept(listenSocket, NULL, NULL);
+            if (client == INVALID_SOCKET) continue;
+
+            EnterCriticalSection(&clients_lock);
+            if (clients.len() < MAX_CLIENTS) {
+                clients.push_back(client);
+                CreateThread(NULL, 0, client_thread, (LPVOID)client, 0, NULL);
+            } else {
+                closesocket(client);
+            }
+            LeaveCriticalSection(&clients_lock);
+        }
+    }
+
+    DeleteCriticalSection(&stats_lock);
+    DeleteCriticalSection(&clients_lock);
     closesocket(listenSocket);
     WSACleanup();
     return 0;
