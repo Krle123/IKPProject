@@ -49,7 +49,7 @@ int main() {
     char recvBuffer[200];
     int tries = 0;
     int correct_number = dist(gen);
-    std::cout << "Broj za pogoditi je: " << correct_number << std::endl;
+    std::cout << "Number to guess: " << correct_number << std::endl;
     while(true){
         memcpy(sendBuffer, &tdc, sizeof(tdc));
         Sleep(1000);

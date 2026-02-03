@@ -84,6 +84,7 @@ T List<T>::pop_front(){
     node_st<T> *current = head;
     head = head->next;
     T to_send = current->data;
+    current->next = NULL;
     free(current);
     length--;
     return to_send;

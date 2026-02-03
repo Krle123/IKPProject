@@ -19,7 +19,7 @@ volatile bool server_running = true;
 int total_wins = 0;
 int total_losses = 0;
 
-void log_result(bool win) {
+void log_result(bool win, int tries, int correct) {
     EnterCriticalSection(&stats_lock);
 
     if (win)
@@ -28,7 +28,7 @@ void log_result(bool win) {
         total_losses++;
 
     std::ofstream file("results.txt", std::ios::app);
-    file << (win ? "WIN\n" : "LOSS\n");
+    file << (win ? "WIN " : "LOSS") << "\tTries: [" << tries << "] Correct number was: [" << correct <<"]\n";
     file.close();
 
     std::cout << "Wins: " << total_wins
@@ -95,7 +95,7 @@ DWORD WINAPI client_thread(LPVOID param) {
     }
 
     if (game_finished)
-        log_result(win);
+        log_result(win, tdc.from, tdc.to);
 
     EnterCriticalSection(&clients_lock);
     if (clients.len() > 0)
@@ -130,9 +130,9 @@ int main() {
     timeval tv;
 
     std::ofstream file("results.txt", std::ios::app);
-    file << "\nServer started\n";
+    file << "Server started\n";
     file.close();
-
+    std::cout<<"Server up listening for clients...\nPress 1 to exit\n";
     while (server_running) {
         if (_kbhit()) {
             char c = _getch();
@@ -155,7 +155,7 @@ int main() {
         if (FD_ISSET(listenSocket, &readfds)) {
             SOCKET client = accept(listenSocket, NULL, NULL);
             if (client == INVALID_SOCKET) continue;
-
+            
             EnterCriticalSection(&clients_lock);
             if (clients.len() < MAX_CLIENTS) {
                 clients.push_back(client);
